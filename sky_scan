@@ -1,0 +1,402 @@
+#!/usr/bin/env python
+
+"""Simulate a scanning of the sky for the LSPE.
+
+This program uses a simplified mathematical model to determing the pointings of
+the LSPE during a survey.
+"""
+
+from datetime import datetime, timedelta
+from optparse import OptionParser
+import os
+import sys
+
+################################################################################
+
+# Try to import Healpy. If the importing fails, provide some information to the
+# user about how to get the package.
+try:
+    import healpy
+
+except ImportError:
+    sys.stderr.write ("""You must install the Healpy package in order to use
+this program.  It can be downloaded from the following site:
+
+      http://code.google.com/p/healpy/ 
+""")
+    sys.exit (1)
+
+# Ditto for numpy and matplotlib (note that the user is advised to install
+# Scipy)
+try:
+    import numpy as np
+    import matplotlib
+    from mpl_toolkits.mplot3d import axes3d
+
+except ImportError:
+    sys.stderr.write ("""You must install the Scipy package in order to use
+this program.  If you are using an Unix system, chances
+are that it comes pre-packaged with your distribution.
+Otherwise, It can be downloaded from the following site:
+
+      http://www.scipy.org/
+""")
+    sys.exit (1)
+
+################################################################################
+
+# General-purpose constants
+SECONDS_PER_DAY = 24L * 60L * 60L
+
+################################################################################
+
+def rotate (vect, angle, axis):
+    """Rotate `vect' around `axis' by `angle'.
+    
+    Both `vect' and `angle' must be 3-D normalized vectors. `angle' is
+    expressed in radians."""
+
+    cosine = np.cos (angle)
+    sine   = np.sin (angle)
+
+    return (vect * cosine + \
+            sine * np.cross (axis, vect) + \
+            np.dot (axis, vect) * (1 - cosine) * axis)
+
+################################################################################
+
+def coord_to_pointing (coordinates):
+    """Return the normalized vector which points toward the specified direction.
+
+    `coordinates' is a (latitude, longitude) pair where each angle is expressed
+    in radians. The return value is a numarray vector of 3 elements."""
+
+    clat = np.cos (coordinates[0])
+    return np.array ([clat * np.cos (coordinates[1]),
+                      clat * np.sin (coordinates[1]),
+                      np.sin (coordinates[0])])
+
+################################################################################
+
+def pointing_to_coord (pointing):
+    """Return the direction corresponding to a normalized vector.
+
+    The return value is a (latitude, longitude) pair (in radians) corresponding
+    to the direction of the 3-D normalized vector `pointing'."""
+
+    return (np.arctan2 (pointing[2], np.sqrt (pointing[0]**2 + pointing[1]**2)),
+            np.arctan2 (pointing[1], pointing[0]))
+
+################################################################################
+
+class Horn:
+    """A class which holds all the information about the scanning strategy of
+    a specific horn.
+    
+    This class implements a number of methods that provide the attitude of the
+    instrument at a given time. Such time is expressed as the seconds elapsed
+    from a predefined time."""
+
+    def __init__ (self,
+                  elevation = 45.0,
+                  start_angle = 0.0,
+                  latitude = 78.0,
+                  longitude = 0.0,
+                  rot_per_min = 1,
+                  rev_days = 15):
+        """Initialize the object.
+
+        If `elevation' is provided, this is the elevation (in *degrees*) of the
+        instrument with respect to the horizon. Similarly, if `latitude' is
+        provided, this is the (fixed) latitude (in *degrees* again) of the
+        balloon during flight. The value of `longitude' provides the longitude
+        (in degrees) at the beginning of the mission. Finally, `rot_per_min' is
+        the number of rotations the instrument does around the spin axis in one
+        minute."""
+
+        self.elevation   = np.deg2rad (elevation)       # Units: [rad]
+        self.start_angle = np.deg2rad (start_angle)     # Units: [rad]
+
+        self.base_lat    = np.deg2rad (latitude)        # Units: [rad]
+        self.base_long   = np.deg2rad (longitude)       # Units: [rad]
+
+        self.omega_rot   = 2 * np.pi * rot_per_min / 60 # Units: [rad/s]
+        self.rev_days    = rev_days                     # Units: [day]
+
+    def vect_from_lspe_to_earth (self, vector, time):
+        """Convert a vector from the LSPE coordinate system to the equatorial
+        coordinate system."""
+
+        position_coord  = self.lspe_coordinates (time)
+        position_vector = coord_to_pointing (position_coord)
+        angle = np.arccos (np.dot (self.spin_axis_lspe (time), position_vector))
+        rot_axis = np.array ([-np.sin (position_coord[1]),
+                              np.cos (position_coord[1]),
+                              0])
+
+        return rotate (vector, angle, rot_axis)
+
+    def pointing_pos_lspe (self, time):
+        """Return the direction of the LSPE pointing axis at the given time.
+
+        `time' is expressed in seconds. The result is a (latitude, longitude)
+        pair in the LSPE coordinate system (z points toward the Zenith)."""
+
+        return (self.elevation, self.start_angle + time * self.omega_rot)
+
+    def pointing_dir_lspe (self, time):
+        """Return the pointing axis at the given time.
+
+        `time' is expressed in seconds. The result is a 3-D normalized vector
+        in the LSPE coordinate system (z points toward the Zenith)."""
+
+        return coord_to_pointing (self.pointing_pos_lspe (time))
+
+    def pointing_dir_earth (self, time):
+        """Return the pointing axis at the given time.
+
+        `time' is expressed in seconds. The result is a 3-D normalized vector
+        in the Earth coordinate system (equatorial coordinates)."""
+
+        return self.vect_from_lspe_to_earth (self.pointing_dir_lspe (time),
+                                             time)
+
+    def lspe_coordinates (self, time):
+        """Return the coordinates of LSPE at the given time.
+
+        The result is a (latitude, longitude) pair specifying where LSPE is at
+        the given `time' (in seconds)."""
+
+        return (self.base_lat,
+                self.base_long
+                + time * 2 * np.pi * (1 + 1 / self.rev_days) / SECONDS_PER_DAY)
+
+    def spin_axis_lspe (self, dummy):
+        """Return the spin axis at the given time.
+
+        `dummy' is the time and is expressed in seconds. The result is a 3-D
+        normalized vector in the LSPE coordinate system. It is always the z
+        versor (regardless of the value of `dummy', hence the name)."""
+
+        return np.array ([0, 0, 1])
+
+    def spin_axis_earth (self, time):
+        """Return the LSPE spin axis at the given time.
+
+        `time' is expressed in seconds. The result is a 3-D normalized vector
+        in the equatorial coordinate system."""
+
+        return self.vect_from_lspe_to_earth (self.spin_axis_lspe (time),
+                                             time)
+
+################################################################################
+
+def parse_command_line ():
+    "Parse the arguments provided by the user on the command line."
+
+    def format_help (s):
+        return ' '.join (s.split ())
+
+    parser = OptionParser ()
+    parser.add_option ("--days", dest = "days", metavar = "NUM",
+                       help = format_help ("""Number of days to use for the
+                                           simulation (default: %default)"""),
+                       action = "store", type = "float", default = 15.0)
+
+    parser.add_option ("--hitmap", dest = "hitmap_file_name", metavar = "FILE",
+                       help = format_help ("""FITS file that will contain the
+                                           hit map (default: %default)"""),
+                       default = "hitmap.fits")
+    parser.add_option ("--hitmap-image", dest = "hitmap_image_file_name",
+                       metavar = "FILE", default = "hitmap.png",
+                       help = format_help ("""PNG image of the hit map
+                                           (default: %default)"""))
+
+    parser.add_option ("--mask", dest = "mask_file_name", metavar = "FILE",
+                       help = format_help ("""FITS file that will contain the
+                                           hit map (default: %default)"""),
+                       default = "mask.fits")
+    parser.add_option ("--mask-image", dest = "mask_image_file_name", metavar =
+                       "FILE", help = format_help ("""PNG image of the mask
+                                                   (default: %default)"""),
+                       default = "mask.png")
+
+    # The default for `nside' is 64, which corresponds to an angular
+    # sensitivity of roughly 1 degree
+    parser.add_option ("-n", "--nside", dest = "nside", metavar = "NUM", help =
+                       format_help ("""Value of NSIDE (power of 2, default
+                                    %default)"""),
+                       type = "int", default = 64)
+
+    parser.add_option ("--elevation", dest = "elevation", metavar = "VALUE",
+                       help = format_help ("""New horn elevation to add to the
+                                           list (in degrees"""),
+                       action = "append", type = "float")
+
+    parser.add_option ("--latitude", dest = "latitude", metavar = "VALUE",
+                       help = format_help ("""Geographical latitude (in
+                                           degrees, default %default)"""),
+                       default = 78, type = "float")
+
+    parser.add_option ("--longitude", dest = "longitude", metavar = "VALUE",
+                       help = format_help ("""Geographical longitude (in
+                                           degrees, default %default)"""),
+                       default = 0, type = "float")
+
+    parser.add_option ("--rotations", dest = "rot_per_min", metavar = "NUM",
+                       help = format_help ("""Number of rotations around the
+                                           spin axis per minute (default
+                                           %default)"""),
+                       default = 1.0, type = "float")
+
+    parser.add_option ("--revolution-days", dest = "revolution_days",
+                       metavar = "NUM", default = 15, type = "float",
+                       help = format_help ("""Revolution period of the balloon
+                                           (in days)"""))
+
+    parser.add_option ("-t", "--time-resolution", dest = "time_resolution",
+                       metavar = "VALUE", default = 0.25, type = "float",
+                       help = format_help ("""Discrete time step to use in the
+                                           simulation (in seconds, default
+                                           %default)"""))
+
+    return parser.parse_args ()
+
+################################################################################
+
+def print_progress_bar (time, max_time, elapsed_time):
+    """Print a progress bar to stderr.
+    
+    `time' is the current time (in the units used by the simulation codes) and
+    `max_time' is the maximum value achievable by `time'. The `elapsed_time'
+    object is an instance of `timedelta' and represents the time used by the
+    program to run the simulation up to now."""
+
+    BAR_LENGTH = 40
+
+    bars   = '*' * int (time * BAR_LENGTH / max_time)
+    spaces = ' ' * (BAR_LENGTH - len (bars))
+    day    = time / SECONDS_PER_DAY
+    sys.stderr.write ("\r%3d%% [%s%s] Day %2d, elapsed time: %s" % \
+                      (percent, bars, spaces, day,
+                       str (elapsed_time)))
+
+################################################################################
+
+(options, args) = parse_command_line ()
+if len (args) > 0:
+    sys.stderr.write ("warning: wrong options on the command line.\n")
+
+if not options.elevation:
+    options.elevation = [45]
+
+horn_list = []
+for elevation in options.elevation:
+    horn_list.append (Horn (elevation   = elevation,
+                            latitude    = options.latitude,
+                            longitude   = options.longitude,
+                            rot_per_min = options.rot_per_min,
+                            rev_days    = options.revolution_days))
+
+DAYS = options.days
+MAX_TIME = int (round (DAYS * SECONDS_PER_DAY))
+HITMAP_FILE_NAME        = options.hitmap_file_name
+HITMAP_FIGURE_FILE_NAME = options.hitmap_image_file_name
+MASK_FILE_NAME          = options.mask_file_name
+MASK_FIGURE_FILE_NAME   = options.mask_image_file_name
+NSIDE                   = options.nside
+TIME_RESOLUTION         = options.time_resolution
+
+npix   = healpy.nside2npix (NSIDE)
+hitmap = np.zeros (npix, dtype = 'int')
+mask   = np.zeros (npix, dtype = 'int')
+
+old_percent = -1
+
+START_TIME = datetime.now ()
+old_elapsed_time = timedelta ()
+current_pixel = -1
+
+# Main cycle of the simulation
+for time_idx in xrange (0, int (MAX_TIME / TIME_RESOLUTION) + 1):
+
+    time = time_idx * TIME_RESOLUTION
+
+    # First draw the progress bar
+    elapsed_time = datetime.now () - START_TIME
+    percent = time * 100 / MAX_TIME
+    if (elapsed_time - old_elapsed_time >= timedelta (seconds = 1.0)) \
+       or percent == 100:
+        print_progress_bar (time, MAX_TIME, elapsed_time)
+        old_elapsed_time = elapsed_time
+
+    if percent == 100:
+        sys.stderr.write ("\n")
+        break
+
+    # Get the pointing direction of the satellite at the current time
+    for cur_horn in horn_list:
+        vector = cur_horn.pointing_dir_earth (time)
+        coordinates = pointing_to_coord (vector)
+
+        # Keep track of the minimum and maximum latitude for statistical purposes
+        if time == 0:
+            min_lat = coordinates[0]
+            max_lat = coordinates[0]
+        else:
+            min_lat = np.min ([min_lat, coordinates[0]])
+            max_lat = np.max ([max_lat, coordinates[0]])
+
+        # Convert the pointing direction into a pixel in the Healpix map
+        pixel_index = healpy.ang2pix (NSIDE, np.pi * 0.5 - coordinates[0], coordinates[1])
+        if current_pixel != pixel_index:
+            # Only increment the hit count if we are within a pixel different from
+            # the one in the previous cycle. In this way we are not dependent from
+            # the resolution of the `time' variable.
+            hitmap[pixel_index] = hitmap[pixel_index] + 1
+            mask[pixel_index] = 1
+
+            current_pixel = pixel_index
+
+
+# The simulation has completed. Now print some statistics
+
+print "Latitude range: [%f, %f] degrees" % (np.degrees (min_lat),
+                                            np.degrees (max_lat))
+nonzero_hits = np.flatnonzero (hitmap)
+print "Number of pixel covered: %d/%d (%d%% of total)" % \
+        (len (nonzero_hits),
+         len (mask),
+         (len (nonzero_hits) * 100) / len (mask))
+print "Hit statistics: min=%d, mean=%d, median=%d, max=%d" % \
+        (np.min (nonzero_hits),
+         np.mean (nonzero_hits),
+         np.median (nonzero_hits),
+         np.max (nonzero_hits))
+
+# This in order to prevent Healpy from writing a warning message
+if os.path.exists (HITMAP_FILE_NAME):
+    os.remove (HITMAP_FILE_NAME)
+
+healpy.write_map (HITMAP_FILE_NAME, hitmap)
+print "The hitmap has been written to file '%s'" % HITMAP_FILE_NAME
+healpy.write_map (MASK_FILE_NAME, mask)
+print "The mask has been written to file '%s'" % MASK_FILE_NAME
+
+healpy.mollview (hitmap,
+                 coord = 'E',
+                 unit = 'Number of hits',
+                 title = 'Hitmap for LSPE (equatorial coordinates)')
+matplotlib.pyplot.savefig (HITMAP_FIGURE_FILE_NAME, format = 'png')
+matplotlib.pyplot.close ()
+print "An image of the hitmap has been written to file '%s'" % \
+        HITMAP_FIGURE_FILE_NAME
+
+healpy.mollview (mask,
+                 coord = 'E',
+                 unit = 'Flag',
+                 title = 'Mask for LSPE (equatorial coordinates)')
+matplotlib.pyplot.savefig (MASK_FIGURE_FILE_NAME, format = 'png')
+matplotlib.pyplot.close ()
+print "An image of the mask has been written to file '%s'" % \
+        MASK_FIGURE_FILE_NAME

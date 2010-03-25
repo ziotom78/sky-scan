@@ -288,7 +288,7 @@ def print_progress_bar (time, max_time, elapsed_time):
 if len (args) > 0:
     sys.stderr.write ("warning: wrong options on the command line.\n")
 
-if not options.elevation:
+if not options.horns:
     options.horns = [(1, 45)]
 
 # `horn_list' is a list of (NUM, HORN) pairs where NUM is an integer specifying
@@ -300,7 +300,7 @@ for horn in options.horns:
                              latitude    = options.latitude,
                              longitude   = options.longitude,
                              rot_per_min = options.rot_per_min,
-                             rev_days    = options.revolution_days))
+                             rev_days    = options.revolution_days)))
 
 DAYS = options.days
 MAX_TIME = int (round (DAYS * SECONDS_PER_DAY))

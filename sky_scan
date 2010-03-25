@@ -363,7 +363,8 @@ for time_idx in xrange (0, int (MAX_TIME / TIME_RESOLUTION) + 1):
 
 print "Latitude range: [%f, %f] degrees" % (np.degrees (min_lat),
                                             np.degrees (max_lat))
-nonzero_hits = np.flatnonzero (hitmap)
+nonzero_hit_pos = np.flatnonzero (hitmap)
+nonzero_hits    = hitmap[nonzero_hit_pos]
 print "Number of pixel covered: %d/%d (%d%% of total)" % \
         (len (nonzero_hits),
          len (mask),

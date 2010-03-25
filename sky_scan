@@ -228,10 +228,11 @@ def parse_command_line ():
                                     %default)"""),
                        type = "int", default = 64)
 
-    parser.add_option ("--elevation", dest = "elevation", metavar = "VALUE",
-                       help = format_help ("""New horn elevation to add to the
-                                           list (in degrees"""),
-                       action = "append", type = "float")
+    parser.add_option ("--horns", dest = "horns", metavar = "NUM ANGLE",
+                       help = format_help ("""Specify that NUM horns will have
+                                           an elevation of ANGLE (in degrees).
+                                           Might be repeated """),
+                       action = "append", nargs = 2, type = "float")
 
     parser.add_option ("--latitude", dest = "latitude", metavar = "VALUE",
                        help = format_help ("""Geographical latitude (in
@@ -255,9 +256,9 @@ def parse_command_line ():
                                            (in days)"""))
 
     parser.add_option ("-t", "--time-resolution", dest = "time_resolution",
-                       metavar = "VALUE", default = 0.25, type = "float",
-                       help = format_help ("""Discrete time step to use in the
-                                           simulation (in seconds, default
+                       metavar = "VALUE", default = 0.1, type = "float",
+                       help = format_help ("""Integration time for one sample
+                                           in the TOD (in seconds, default
                                            %default)"""))
 
     return parser.parse_args ()
@@ -288,15 +289,18 @@ if len (args) > 0:
     sys.stderr.write ("warning: wrong options on the command line.\n")
 
 if not options.elevation:
-    options.elevation = [45]
+    options.horns = [(1, 45)]
 
+# `horn_list' is a list of (NUM, HORN) pairs where NUM is an integer specifying
+# the number of horns and HORN is an instance of the `Horn' class.
 horn_list = []
-for elevation in options.elevation:
-    horn_list.append (Horn (elevation   = elevation,
-                            latitude    = options.latitude,
-                            longitude   = options.longitude,
-                            rot_per_min = options.rot_per_min,
-                            rev_days    = options.revolution_days))
+for horn in options.horns:
+    horn_list.append ((int (horn[0]),
+                       Horn (elevation   = horn[1],
+                             latitude    = options.latitude,
+                             longitude   = options.longitude,
+                             rot_per_min = options.rot_per_min,
+                             rev_days    = options.revolution_days))
 
 DAYS = options.days
 MAX_TIME = int (round (DAYS * SECONDS_PER_DAY))
@@ -307,15 +311,14 @@ MASK_FIGURE_FILE_NAME   = options.mask_image_file_name
 NSIDE                   = options.nside
 TIME_RESOLUTION         = options.time_resolution
 
-npix   = healpy.nside2npix (NSIDE)
-hitmap = np.zeros (npix, dtype = 'int')
-mask   = np.zeros (npix, dtype = 'int')
+npix     = healpy.nside2npix (NSIDE)
+hitmap   = np.zeros (npix, dtype = 'int')
+mask     = np.zeros (npix, dtype = 'int')
 
 old_percent = -1
 
 START_TIME = datetime.now ()
 old_elapsed_time = timedelta ()
-current_pixel = -1
 
 # Main cycle of the simulation
 for time_idx in xrange (0, int (MAX_TIME / TIME_RESOLUTION) + 1):
@@ -335,7 +338,7 @@ for time_idx in xrange (0, int (MAX_TIME / TIME_RESOLUTION) + 1):
         break
 
     # Get the pointing direction of the satellite at the current time
-    for cur_horn in horn_list:
+    for (num_of_horns, cur_horn) in horn_list:
         vector = cur_horn.pointing_dir_earth (time)
         coordinates = pointing_to_coord (vector)
 
@@ -349,14 +352,9 @@ for time_idx in xrange (0, int (MAX_TIME / TIME_RESOLUTION) + 1):
 
         # Convert the pointing direction into a pixel in the Healpix map
         pixel_index = healpy.ang2pix (NSIDE, np.pi * 0.5 - coordinates[0], coordinates[1])
-        if current_pixel != pixel_index:
-            # Only increment the hit count if we are within a pixel different from
-            # the one in the previous cycle. In this way we are not dependent from
-            # the resolution of the `time' variable.
-            hitmap[pixel_index] = hitmap[pixel_index] + 1
-            mask[pixel_index] = 1
 
-            current_pixel = pixel_index
+        hitmap[pixel_index] = hitmap[pixel_index] + num_of_horns
+        mask[pixel_index] = 1
 
 
 # The simulation has completed. Now print some statistics

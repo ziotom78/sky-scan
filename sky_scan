@@ -385,7 +385,8 @@ print "The mask has been written to file '%s'" % MASK_FILE_NAME
 healpy.mollview (hitmap,
                  coord = 'E',
                  unit = 'Number of hits',
-                 title = 'Hitmap for LSPE (equatorial coordinates)')
+                 title = 'Hitmap - Nside=%d (~%f deg), time_res = %f s' \
+                 % (NSIDE, 180 / (np.sqrt (3 * np.pi) * NSIDE), TIME_RESOLUTION))
 matplotlib.pyplot.savefig (HITMAP_FIGURE_FILE_NAME, format = 'png')
 matplotlib.pyplot.close ()
 print "An image of the hitmap has been written to file '%s'" % \

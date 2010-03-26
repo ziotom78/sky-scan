@@ -31,7 +31,6 @@ this program.  It can be downloaded from the following site:
 try:
     import numpy as np
     import matplotlib
-    from mpl_toolkits.mplot3d import axes3d
 
 except ImportError:
     sys.stderr.write ("""You must install the Scipy package in order to use

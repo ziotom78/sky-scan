@@ -113,11 +113,11 @@ class Horn:
         the number of rotations the instrument does around the spin axis in one
         minute."""
 
-        self.elevation   = np.deg2rad (elevation)       # Units: [rad]
-        self.start_angle = np.deg2rad (start_angle)     # Units: [rad]
+        self.elevation   = np.radians (elevation)       # Units: [rad]
+        self.start_angle = np.radians (start_angle)     # Units: [rad]
 
-        self.base_lat    = np.deg2rad (latitude)        # Units: [rad]
-        self.base_long   = np.deg2rad (longitude)       # Units: [rad]
+        self.base_lat    = np.radians (latitude)        # Units: [rad]
+        self.base_long   = np.radians (longitude)       # Units: [rad]
 
         self.omega_rot   = 2 * np.pi * rot_per_min / 60 # Units: [rad/s]
         self.rev_days    = rev_days                     # Units: [day]

@@ -127,8 +127,11 @@ class Horn:
         coordinate system."""
 
         position_coord  = self.lspe_coordinates (time)
-        position_vector = coord_to_pointing (position_coord)
-        angle = np.arccos (np.dot (self.spin_axis_lspe (time), position_vector))
+        # The following code has been optimized:
+        #   position_vector = coord_to_pointing (position_coord)
+        #   angle = np.arccos (np.dot (self.spin_axis_lspe (time), position_vector))
+        # and is therefore a one-line assignment: 
+        angle = np.pi * 0.5 - position_coord[0]
         rot_axis = np.array ([-np.sin (position_coord[1]),
                               np.cos (position_coord[1]),
                               0])
@@ -311,7 +314,7 @@ NSIDE                   = options.nside
 TIME_RESOLUTION         = options.time_resolution
 
 npix     = healpy.nside2npix (NSIDE)
-hitmap   = np.zeros (npix, dtype = 'int')
+hitmap   = np.zeros (npix)
 mask     = np.zeros (npix, dtype = 'int')
 
 old_percent = -1
@@ -339,27 +342,30 @@ for time_idx in xrange (0, int (MAX_TIME / TIME_RESOLUTION) + 1):
     # Get the pointing direction of the satellite at the current time
     for (num_of_horns, cur_horn) in horn_list:
         vector = cur_horn.pointing_dir_earth (time)
-        coordinates = pointing_to_coord (vector)
+        #coordinates = pointing_to_coord (vector)
 
         # Keep track of the minimum and maximum latitude for statistical purposes
-        if time == 0:
+        if False and time == 0:
             min_lat = coordinates[0]
             max_lat = coordinates[0]
         else:
-            min_lat = np.min ([min_lat, coordinates[0]])
-            max_lat = np.max ([max_lat, coordinates[0]])
+            if False:
+                min_lat = np.min ([min_lat, coordinates[0]])
+                max_lat = np.max ([max_lat, coordinates[0]])
 
         # Convert the pointing direction into a pixel in the Healpix map
-        pixel_index = healpy.ang2pix (NSIDE, np.pi * 0.5 - coordinates[0], coordinates[1])
+        #pixel_index = healpy.ang2pix (NSIDE, np.pi * 0.5 - coordinates[0], coordinates[1])
+        pixel_index = healpy.vec2pix (NSIDE, vector[0], vector[1], vector[2])
 
-        hitmap[pixel_index] = hitmap[pixel_index] + num_of_horns
+        hitmap[pixel_index] = hitmap[pixel_index] + num_of_horns * TIME_RESOLUTION
         mask[pixel_index] = 1
 
 
 # The simulation has completed. Now print some statistics
 
-print "Latitude range: [%f, %f] degrees" % (np.degrees (min_lat),
-                                            np.degrees (max_lat))
+if False:
+    print "Latitude range: [%f, %f] degrees" % (np.degrees (min_lat),
+                                                np.degrees (max_lat))
 nonzero_hit_pos = np.flatnonzero (hitmap)
 nonzero_hits    = hitmap[nonzero_hit_pos]
 print "Number of pixel covered: %d/%d (%d%% of total)" % \
@@ -381,10 +387,10 @@ print "The hitmap has been written to file '%s'" % HITMAP_FILE_NAME
 healpy.write_map (MASK_FILE_NAME, mask)
 print "The mask has been written to file '%s'" % MASK_FILE_NAME
 
-healpy.mollview (hitmap,
+healpy.mollview (hitmap * TIME_RESOLUTION,
                  coord = 'E',
-                 unit = 'Number of hits',
-                 title = 'Hitmap - Nside=%d (~%f deg), time_res = %f s' \
+                 unit = 'Integration time [s]',
+                 title = 'Map of the integration time - Nside=%d (~%f deg), time_res = %f s' \
                  % (NSIDE, 180 / (np.sqrt (3 * np.pi) * NSIDE), TIME_RESOLUTION))
 matplotlib.pyplot.savefig (HITMAP_FIGURE_FILE_NAME, format = 'png')
 matplotlib.pyplot.close ()

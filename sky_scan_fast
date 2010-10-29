@@ -1,0 +1,243 @@
+#!/usr/bin/env python
+
+"""Simulate a scanning of the sky for the LSPE.
+
+This program uses a simplified mathematical model to determing the pointings of
+the LSPE during a survey. It is considerably faster than 'sky_scan', but also
+more difficult to read because of a number of mathematical simplifications done
+in the code.
+"""
+
+from datetime import datetime, timedelta
+from optparse import OptionParser
+import os
+import sys
+
+################################################################################
+
+# Try to import Healpy. If the importing fails, provide some information to the
+# user about how to get the package.
+try:
+    import healpy
+
+except ImportError:
+    sys.stderr.write ("""You must install the Healpy package in order to use
+this program.  It can be downloaded from the following site:
+
+      http://code.google.com/p/healpy/ 
+""")
+    sys.exit (1)
+
+# Ditto for numpy and matplotlib (note that the user is advised to install
+# Scipy)
+try:
+    import numpy as np
+    import matplotlib
+
+except ImportError:
+    sys.stderr.write ("""You must install the Scipy package in order to use
+this program.  If you are using an Unix system, chances
+are that it comes pre-packaged with your distribution.
+Otherwise, It can be downloaded from the following site:
+
+      http://www.scipy.org/
+""")
+    sys.exit (1)
+
+################################################################################
+
+# General-purpose constants
+SECONDS_PER_DAY = 24L * 60L * 60L
+
+################################################################################
+
+def parse_command_line ():
+    "Parse the arguments provided by the user on the command line."
+
+    def format_help (s):
+        return ' '.join (s.split ())
+
+    parser = OptionParser ()
+    parser.add_option ("--days", dest = "days", metavar = "NUM",
+                       help = format_help ("""Number of days to use for the
+                                           simulation (default: %default)"""),
+                       action = "store", type = "float", default = 15.0)
+
+    parser.add_option ("--hitmap", dest = "hitmap_file_name", metavar = "FILE",
+                       help = format_help ("""FITS file that will contain the
+                                           hit map (default: %default)"""),
+                       default = "hitmap.fits")
+    parser.add_option ("--hitmap-image", dest = "hitmap_image_file_name",
+                       metavar = "FILE", default = "hitmap.png",
+                       help = format_help ("""PNG image of the hit map
+                                           (default: %default)"""))
+
+    parser.add_option ("--mask", dest = "mask_file_name", metavar = "FILE",
+                       help = format_help ("""FITS file that will contain the
+                                           hit map (default: %default)"""),
+                       default = "mask.fits")
+    parser.add_option ("--mask-image", dest = "mask_image_file_name", metavar =
+                       "FILE", help = format_help ("""PNG image of the mask
+                                                   (default: %default)"""),
+                       default = "mask.png")
+
+    # The default for `nside' is 64, which corresponds to an angular
+    # sensitivity of roughly 1 degree
+    parser.add_option ("-n", "--nside", dest = "nside", metavar = "NUM", help =
+                       format_help ("""Value of NSIDE (power of 2, default
+                                    %default)"""),
+                       type = "int", default = 64)
+
+    parser.add_option ("--horns", dest = "horns", metavar = "NUM ANGLE",
+                       help = format_help ("""Specify that NUM horns will have
+                                           an elevation of ANGLE (in degrees).
+                                           Might be repeated """),
+                       action = "append", nargs = 2, type = "float")
+
+    parser.add_option ("--latitude", dest = "latitude", metavar = "VALUE",
+                       help = format_help ("""Geographical latitude (in
+                                           degrees, default %default)"""),
+                       default = 78, type = "float")
+
+    parser.add_option ("--longitude", dest = "longitude", metavar = "VALUE",
+                       help = format_help ("""Geographical longitude (in
+                                           degrees, default %default)"""),
+                       default = 0, type = "float")
+
+    parser.add_option ("--rotations", dest = "rot_per_min", metavar = "NUM",
+                       help = format_help ("""Number of rotations around the
+                                           spin axis per minute (default
+                                           %default)"""),
+                       default = 1.0, type = "float")
+
+    parser.add_option ("--revolution-days", dest = "revolution_days",
+                       metavar = "NUM", default = 15, type = "float",
+                       help = format_help ("""Revolution period of the balloon
+                                           (in days)"""))
+
+    parser.add_option ("-t", "--time-resolution", dest = "time_resolution",
+                       metavar = "VALUE", default = 0.1, type = "float",
+                       help = format_help ("""Integration time for one sample
+                                           in the TOD (in seconds, default
+                                           %default)"""))
+
+    return parser.parse_args ()
+
+################################################################################
+
+(options, args) = parse_command_line ()
+if len (args) > 0:
+    sys.stderr.write ("warning: wrong options on the command line.\n")
+
+if not options.horns:
+    options.horns = [(1, 45)]
+
+DAYS = options.days
+MAX_TIME = int (round (DAYS * SECONDS_PER_DAY))
+HITMAP_FILE_NAME        = options.hitmap_file_name
+HITMAP_FIGURE_FILE_NAME = options.hitmap_image_file_name
+MASK_FILE_NAME          = options.mask_file_name
+MASK_FIGURE_FILE_NAME   = options.mask_image_file_name
+NSIDE                   = options.nside
+TIME_RESOLUTION         = options.time_resolution
+OMEGA_SPIN              = 2.0 * np.pi * options.rot_per_min / 60.0
+OMEGA_ROT               = 2 * np.pi * (1 + 1.0 / options.revolution_days) / SECONDS_PER_DAY
+
+npix     = healpy.nside2npix (NSIDE)
+hitmap   = np.zeros (npix)
+mask     = np.zeros (npix, dtype = 'int')
+
+time = np.arange (0, MAX_TIME, TIME_RESOLUTION)
+spin_angle = OMEGA_SPIN * time
+balloon_longitude = np.radians (options.longitude) + OMEGA_ROT * time
+delta_angle = spin_angle - balloon_longitude
+
+COS_LATITUDE = np.cos (np.radians (options.latitude))
+SIN_LATITUDE = np.sin (np.radians (options.latitude))
+
+# Take two absurd values
+min_lat = np.radians (180)
+max_lat = np.radians (-180)
+
+for horn in options.horns:
+    sys.stderr.write ("Simulating scanning for %d horn(s) with inclination %.1f degrees\n" \
+                      % (int (horn[0]), horn[1]))
+    COS_ELEVATION = np.cos (np.radians (horn[1]))
+    SIN_ELEVATION = np.sin (np.radians (horn[1]))
+
+    pointing_x = \
+            COS_LATITUDE * SIN_ELEVATION * np.cos(balloon_longitude) + \
+            COS_ELEVATION * SIN_LATITUDE * np.cos(spin_angle) + \
+            COS_ELEVATION * (-1 + SIN_LATITUDE) * np.sin(delta_angle) * np.sin(balloon_longitude),
+
+    pointing_y = \
+            COS_LATITUDE * SIN_ELEVATION * np.sin(balloon_longitude) + \
+            COS_ELEVATION * SIN_LATITUDE * np.sin(spin_angle) - \
+            COS_ELEVATION * (-1 + SIN_LATITUDE) * np.sin(delta_angle) * np.cos(balloon_longitude)
+
+    pointing_z = \
+            SIN_ELEVATION * SIN_LATITUDE \
+            -(COS_ELEVATION * COS_LATITUDE * np.cos(delta_angle))
+
+    indexes = healpy.vec2pix (NSIDE, pointing_x, pointing_y, pointing_z)
+
+    # Update the maps
+    pixel_occurrences = np.bincount (indexes[0])
+    hitmap[0:len(pixel_occurrences)] = hitmap[0:len(pixel_occurrences)] + pixel_occurrences * TIME_RESOLUTION
+
+    mask[indexes] = 1
+
+    # Determine the minimum and maximum latitude in the map (this is used for
+    # statistical purposes)
+    (theta, phi) = healpy.pix2ang (NSIDE, indexes)
+    current_min_lat = np.min (theta)
+    if min_lat > current_min_lat:
+        min_lat = current_min_lat
+
+    current_max_lat = np.min (theta)
+    if max_lat < current_max_lat:
+        max_lat = current_max_lat
+
+
+if False:
+    print "Latitude range: [%f, %f] degrees" % (np.degrees (min_lat),
+                                                np.degrees (max_lat))
+nonzero_hit_pos = np.flatnonzero (mask)
+nonzero_hits    = hitmap[nonzero_hit_pos]
+print "Number of pixel covered: %d/%d (%d%% of total)" % \
+        (len (nonzero_hits),
+         len (mask),
+         (len (nonzero_hits) * 100) / len (mask))
+print "Hit statistics: min=%d s, mean=%d s, median=%d s, max=%d s" % \
+        (np.min (nonzero_hits),
+         np.mean (nonzero_hits),
+         np.median (nonzero_hits),
+         np.max (nonzero_hits))
+
+# This in order to prevent Healpy from writing a warning message
+if os.path.exists (HITMAP_FILE_NAME):
+    os.remove (HITMAP_FILE_NAME)
+
+healpy.write_map (HITMAP_FILE_NAME, hitmap)
+print "The hitmap has been written to file '%s'" % HITMAP_FILE_NAME
+healpy.write_map (MASK_FILE_NAME, mask)
+print "The mask has been written to file '%s'" % MASK_FILE_NAME
+
+healpy.mollview (hitmap * TIME_RESOLUTION,
+                 coord = 'E',
+                 unit = 'Integration time [s]',
+                 title = 'Map of the integration time - Nside=%d (~%f deg), time_res = %f s' \
+                 % (NSIDE, 180 / (np.sqrt (3 * np.pi) * NSIDE), TIME_RESOLUTION))
+matplotlib.pyplot.savefig (HITMAP_FIGURE_FILE_NAME, format = 'png')
+matplotlib.pyplot.close ()
+print "An image of the hitmap has been written to file '%s'" % \
+        HITMAP_FIGURE_FILE_NAME
+
+healpy.mollview (mask,
+                 coord = 'E',
+                 unit = 'Flag',
+                 title = 'Mask for LSPE (equatorial coordinates)')
+matplotlib.pyplot.savefig (MASK_FIGURE_FILE_NAME, format = 'png')
+matplotlib.pyplot.close ()
+print "An image of the mask has been written to file '%s'" % \
+        MASK_FIGURE_FILE_NAME
